@@ -1,0 +1,22 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-10-17/server.schema.json",
+  "description": "Sandboxed file manipulation tools for coding agents: trash-backed delete, move, copy, append, line-range edits, atomic batch edits and regex replace with dry-run diffs.",
+  "name": "io.github.HalfLucid/FileInteractionMCP",
+  "version": "0.1.0-beta",
+  "packages": [
+    {
+      "registryType": "nuget",
+      "identifier": "FileInteractionMCP",
+      "version": "0.1.0-beta",
+      "transport": {
+        "type": "stdio"
+      },
+      "packageArguments": [],
+      "environmentVariables": []
+    }
+  ],
+  "repository": {
+    "url": "https://github.com/HalfLucid/FileInteractionMCP",
+    "source": "github"
+  }
+}

@@ -1,0 +1,19 @@
+# Build output
+bin/
+obj/
+*.nupkg
+
+# Visual Studio / Rider
+.vs/
+.idea/
+*.user
+*.suo
+*.swp
+
+# Local-only Claude Code settings (copy .mcp.json.example to .mcp.json and fill in paths)
+.claude/settings.local.json
+.mcp.json
+
+# OS
+Thumbs.db
+.DS_Store
