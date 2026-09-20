@@ -24,6 +24,9 @@ internal sealed class EditTools(PathGuard guard, UndoJournal journal)
 
     private static readonly TimeSpan RegexTimeout = TimeSpan.FromSeconds(2);
 
+    /// <summary>Upper bound on files a single regex_replace call will read; maxFiles applies to files that would change.</summary>
+    private const int MaxScanFiles = 5000;
+
     [McpServerTool(Name = "edit_lines")]
     [Description("Edit a text file by line number: replace or delete a 1-based inclusive range, or insert before/after an anchor line. Pass `expected` (the current text of the target lines) so the edit is rejected if the file has changed since you read it; on mismatch the response shows the actual lines and, if the expected text moved, where it is now. Returns a unified diff. Encoding and line endings are preserved. Undoable.")]
     public object EditLines(
@@ -199,16 +202,16 @@ internal sealed class EditTools(PathGuard guard, UndoJournal journal)
     });
 
     [McpServerTool(Name = "regex_replace")]
-    [Description("Regex search-and-replace (.NET syntax; $1 style substitutions) over one file or over files matched by a glob. Dry run by default: call once to review the diffs, then again with dryRun=false. Nothing is written if more files match than maxFiles. The regex runs against LF-normalized text, so use \\n for line breaks; the file's own line endings are restored on save. Binary, oversized and denied files are skipped and listed. Undoable as one unit.")]
+    [Description("Regex search-and-replace (.NET syntax; $1 style substitutions) over one file or over files matched by a glob. Dry run by default: call once to review the diffs, then again with dryRun=false. Every file the glob matches is scanned, but maxFiles limits only the files whose text would change; nothing is written if more files than that would change. A file where the replacement reproduces the existing text is reported in filesUnchanged, not filesChanged. Globs support **, *, ? and {a,b} alternation; a glob that matches no files is an error. The regex runs against LF-normalized text, so use \\n for line breaks; the file's own line endings are restored on save. Binary, oversized and denied files are skipped and listed. Undoable as one unit.")]
     public object RegexReplace(
         [Description(".NET regular expression.")] string pattern,
         [Description("Replacement text. Use $1, ${name} for groups and $$ for a literal dollar.")] string replacement,
         [Description("A single file to edit. Mutually exclusive with glob.")] string? path = null,
-        [Description("Glob such as **/*.cs, relative to directory. Mutually exclusive with path.")] string? glob = null,
+        [Description("Glob such as **/*.cs or src/{Shop,Input}/*.cs, relative to directory. Mutually exclusive with path.")] string? glob = null,
         [Description("Directory the glob is relative to. Defaults to the first sandbox root.")] string? directory = null,
         [Description("Globs to exclude. Default: **/.git/**, **/.vs/**, **/bin/**, **/obj/**, **/node_modules/**.")] string[]? excludeGlobs = null,
         [Description("Preview only. Default true.")] bool dryRun = true,
-        [Description("Abort if more files than this match the glob. Default 20; the server's hard cap also applies.")] int maxFiles = 20,
+        [Description("Abort if more files than this would change (files the glob scans without changing do not count). Default 20. Cannot exceed the server's maxBulkFiles, default 50, set with --max-bulk-files and shown by fs_roots.")] int maxFiles = 20,
         [Description("Case-insensitive matching.")] bool ignoreCase = false,
         [Description("^ and $ match at line boundaries.")] bool multiline = false,
         [Description(". matches newlines.")] bool singleline = false) => Run(() =>
@@ -229,16 +232,16 @@ internal sealed class EditTools(PathGuard guard, UndoJournal journal)
             ? [guard.ResolveExisting(path)]
             : EnumerateGlob(directory, glob!, excludeGlobs ?? DefaultExcludes, skipped);
 
-        var cap = Math.Min(maxFiles, guard.Options.MaxBulkFiles);
-        if (files.Count > cap)
+        if (files.Count > MaxScanFiles)
         {
             throw new InvalidOperationException(
-                $"{files.Count} files match, over the limit of {cap}. Narrow the glob or raise maxFiles (hard cap {guard.Options.MaxBulkFiles}). Nothing was changed.");
+                $"The glob matches {files.Count} files, more than the {MaxScanFiles} this tool will scan in one call. Narrow the glob. Nothing was changed.");
         }
 
         var results = new List<RegexFileResult>();
         var pending = new List<(TextDocument Doc, string NewText)>();
         var totalReplacements = 0;
+        var filesUnchanged = 0;
         var lfReplacement = TextDocument.ToLf(replacement);
 
         foreach (var file in files)
@@ -267,9 +270,24 @@ internal sealed class EditTools(PathGuard guard, UndoJournal journal)
             }
 
             var newText = doc.Normalize(replaced);
+            if (newText == doc.Text)
+            {
+                // The pattern matched but the replacement reproduced the same text (e.g. renaming
+                // a symbol to its current name). Nothing to write, so it is not a changed file.
+                filesUnchanged++;
+                continue;
+            }
+
             results.Add(new RegexFileResult(file, n, UnifiedDiff.Create(doc.Text, newText, guard.Display(file))));
             pending.Add((doc, newText));
             totalReplacements += n;
+        }
+
+        var cap = Math.Min(maxFiles, guard.Options.MaxBulkFiles);
+        if (results.Count > cap)
+        {
+            throw new InvalidOperationException(
+                $"{results.Count} of {files.Count} scanned files contain matches, over the limit of {cap}. Narrow the glob or raise maxFiles (hard cap {guard.Options.MaxBulkFiles}). Nothing was changed.");
         }
 
         int? undoId = null;
@@ -291,7 +309,7 @@ internal sealed class EditTools(PathGuard guard, UndoJournal journal)
         }
 
         return new RegexReplaceResult(
-            true, !dryRun && pending.Count > 0, dryRun, files.Count, results.Count, totalReplacements, results, skipped, undoId);
+            true, !dryRun && pending.Count > 0, dryRun, files.Count, results.Count, filesUnchanged, totalReplacements, results, skipped, undoId);
     });
 
     private List<string> EnumerateGlob(string? directory, string glob, string[] excludes, List<string> skipped)
@@ -303,8 +321,12 @@ internal sealed class EditTools(PathGuard guard, UndoJournal journal)
         }
 
         var matcher = new Matcher(PathGuard.PathComparison);
-        matcher.AddInclude(glob);
-        foreach (var exclude in excludes)
+        foreach (var include in ExpandBraces(glob))
+        {
+            matcher.AddInclude(include);
+        }
+
+        foreach (var exclude in excludes.SelectMany(ExpandBraces))
         {
             matcher.AddExclude(exclude);
         }
@@ -324,8 +346,82 @@ internal sealed class EditTools(PathGuard guard, UndoJournal journal)
             }
         }
 
+        if (files.Count == 0 && skipped.Count == 0)
+        {
+            throw new FileNotFoundException(
+                $"Glob '{glob}' matched no files under {dir}. Check the pattern and directory; nothing was changed.");
+        }
+
         files.Sort(PathGuard.PathComparer);
         return files;
+    }
+
+    /// <summary>
+    /// Expands {a,b} alternation (nesting allowed) into plain globs, since the matcher does not support braces
+    /// and would otherwise match nothing without complaint. Unbalanced braces are an error.
+    /// </summary>
+    internal static List<string> ExpandBraces(string glob)
+    {
+        var open = glob.IndexOf('{');
+        if (open < 0)
+        {
+            if (glob.Contains('}'))
+            {
+                throw new ArgumentException($"Glob '{glob}' has an unmatched '}}'.");
+            }
+
+            return [glob];
+        }
+
+        var depth = 0;
+        var close = -1;
+        for (var i = open; i < glob.Length; i++)
+        {
+            if (glob[i] == '{')
+            {
+                depth++;
+            }
+            else if (glob[i] == '}' && --depth == 0)
+            {
+                close = i;
+                break;
+            }
+        }
+
+        if (close < 0)
+        {
+            throw new ArgumentException($"Glob '{glob}' has an unmatched '{{'.");
+        }
+
+        var prefix = glob[..open];
+        var suffix = glob[(close + 1)..];
+        var result = new List<string>();
+        foreach (var alternative in SplitTopLevel(glob[(open + 1)..close]))
+        {
+            result.AddRange(ExpandBraces(prefix + alternative + suffix));
+        }
+
+        return result;
+    }
+
+    private static IEnumerable<string> SplitTopLevel(string body)
+    {
+        var depth = 0;
+        var start = 0;
+        for (var i = 0; i < body.Length; i++)
+        {
+            switch (body[i])
+            {
+                case '{': depth++; break;
+                case '}': depth--; break;
+                case ',' when depth == 0:
+                    yield return body[start..i];
+                    start = i + 1;
+                    break;
+            }
+        }
+
+        yield return body[start..];
     }
 
     private static string[] ContentToLines(string? content)

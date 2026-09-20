@@ -81,6 +81,7 @@ public sealed record RegexReplaceResult(
     bool DryRun,
     int FilesScanned,
     int FilesChanged,
+    int FilesUnchanged,
     int TotalReplacements,
     IReadOnlyList<RegexFileResult> Files,
     IReadOnlyList<string> Skipped,

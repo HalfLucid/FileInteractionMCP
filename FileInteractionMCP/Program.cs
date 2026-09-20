@@ -26,8 +26,15 @@ builder.Services
 
 var host = builder.Build();
 
-host.Services.GetRequiredService<ILogger<Program>>().LogInformation(
+var logger = host.Services.GetRequiredService<ILogger<Program>>();
+logger.LogInformation(
     "FileInteractionMCP roots: {Roots}; trash: {Trash}",
     string.Join("; ", sandbox.Roots), sandbox.TrashDirectory);
+
+var pruned = host.Services.GetRequiredService<UndoJournal>().PruneOrphans();
+if (pruned > 0)
+{
+    logger.LogInformation("Removed {Count} orphaned undo snapshot folder(s).", pruned);
+}
 
 await host.RunAsync();

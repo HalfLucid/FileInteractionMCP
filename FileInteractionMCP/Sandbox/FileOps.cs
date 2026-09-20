@@ -5,6 +5,23 @@ internal static class FileOps
 {
     public static void Move(string src, string dst, bool isDir, bool overwrite)
     {
+        if (IsCaseOnlyRename(src, dst))
+        {
+            // The destination "exists" only because it is the source under another spelling.
+            // There is nothing to replace, and deleting it first would delete the source, so the
+            // overwrite flag is ignored. Both File.Move and Directory.Move rename in place here.
+            if (isDir)
+            {
+                Directory.Move(src, dst);
+            }
+            else
+            {
+                File.Move(src, dst);
+            }
+
+            return;
+        }
+
         if (!isDir)
         {
             if (overwrite && Directory.Exists(dst))
@@ -46,6 +63,54 @@ internal static class FileOps
         var skipped = 0;
         CopyDirectory(src, dst, overwrite: false, ref skipped);
         Directory.Delete(src, recursive: true);
+    }
+
+    /// <summary>
+    /// True when <paramref name="dst"/> names the same directory entry as <paramref name="src"/> with
+    /// different letter case, e.g. <c>Readme.md</c> to <c>README.md</c>. On a case-insensitive volume an
+    /// existence check on <paramref name="dst"/> then reports the source itself, not a conflict.
+    /// </summary>
+    public static bool IsCaseOnlyRename(string src, string dst)
+    {
+        var srcName = Path.GetFileName(src);
+        var dstName = Path.GetFileName(dst);
+        if (srcName.Length == 0 || dstName.Length == 0
+            || string.Equals(srcName, dstName, StringComparison.Ordinal)
+            || !string.Equals(srcName, dstName, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var srcParent = Path.GetDirectoryName(src);
+        var dstParent = Path.GetDirectoryName(dst);
+        if (srcParent is null || dstParent is null
+            || !string.Equals(srcParent, dstParent, PathGuard.PathComparison)
+            || !Directory.Exists(srcParent))
+        {
+            return false;
+        }
+
+        // The names differ only in case. Whether that is one entry or two depends on the volume,
+        // not the OS (NTFS folders can be case-sensitive, Linux mounts can be case-insensitive),
+        // so ask the directory what it actually holds under that name.
+        string? found = null;
+        foreach (var entry in Directory.EnumerateFileSystemEntries(srcParent))
+        {
+            var name = Path.GetFileName(entry);
+            if (!string.Equals(name, dstName, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (found is not null)
+            {
+                return false; // Both spellings exist: a real conflict on a case-sensitive volume.
+            }
+
+            found = name;
+        }
+
+        return string.Equals(found, srcName, StringComparison.Ordinal);
     }
 
     public static void CopyDirectory(string src, string dst, bool overwrite, ref int skippedLinks)

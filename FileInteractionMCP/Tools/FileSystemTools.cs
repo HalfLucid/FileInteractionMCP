@@ -161,7 +161,7 @@ internal sealed class FileSystemTools(PathGuard guard, UndoJournal journal)
     });
 
     [McpServerTool(Name = "fs_move")]
-    [Description("Move or rename a file or directory. destination is the full new path, not a parent folder. Fails if destination exists unless overwrite=true. Works across drives. Undoable unless overwrite replaced something.")]
+    [Description("Move or rename a file or directory. destination is the full new path, not a parent folder. Fails if destination exists unless overwrite=true; a rename that changes only letter case is allowed. Works across drives. Does not tell git: it detects ordinary renames by content, but a case-only rename needs `git mv` afterwards when core.ignorecase is true. Undoable unless overwrite replaced something.")]
     public object Move(
         [Description("Existing file or directory.")] string source,
         [Description("Full new path for the item.")] string destination,
@@ -175,13 +175,22 @@ internal sealed class FileSystemTools(PathGuard guard, UndoJournal journal)
             throw new InvalidOperationException("Refusing to move a sandbox root.");
         }
 
+        if (string.Equals(src, dst, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("Source and destination are the same path.");
+        }
+
+        // Renaming Readme.md to README.md: on a case-insensitive volume the destination looks
+        // occupied and looks like the source's own subtree, but it is simply the source.
+        var caseOnlyRename = FileOps.IsCaseOnlyRename(src, dst);
+
         var isDir = Directory.Exists(src);
-        if (isDir && PathGuard.IsWithin(dst, src))
+        if (isDir && !caseOnlyRename && PathGuard.IsWithin(dst, src))
         {
             throw new InvalidOperationException("Cannot move a directory into itself.");
         }
 
-        var destinationExisted = File.Exists(dst) || Directory.Exists(dst);
+        var destinationExisted = !caseOnlyRename && (File.Exists(dst) || Directory.Exists(dst));
         if (!overwrite && destinationExisted)
         {
             throw new IOException($"Destination already exists: {dst}. Pass overwrite=true to replace it.");

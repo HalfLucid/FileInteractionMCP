@@ -52,8 +52,9 @@ Every tool here is a fixed, reviewable operation behind a single sandbox:
 - **Useful failure messages.** When an exact match fails, the response locates the closest text
   in the file. If it differs only in whitespace or indentation it returns the exact lines to use.
   If a line number went stale, it says where the expected text lives now.
-- **Session undo.** Every write, delete and move returns an undo id. Reverting is itself
-  recorded, so it can be undone.
+- **Persistent undo.** Every write, delete and move returns an undo id. The history lives on
+  disk, so it survives restarts and ids keep counting up. Reverting is itself recorded, so it
+  can be undone.
 - **No duplication of what already works.** There is no read-whole-file, glob or grep here.
   The built-in tools for those are good.
 
@@ -66,7 +67,7 @@ Every tool here is a fixed, reviewable operation behind a single sandbox:
 | `fs_convert` | Change encoding and/or line endings, normalize mixed endings, add final newline |
 | `fs_mkdir` | Create a directory and any missing parents |
 | `fs_delete` | Move a file or directory to trash (restorable), or delete permanently |
-| `fs_move` | Move or rename, across drives if needed |
+| `fs_move` | Move or rename (including case-only renames), across drives if needed; git is not told, so case-only renames need `git mv` afterwards |
 | `fs_copy` | Copy a file or a directory tree |
 | `fs_append` | Append text, creating the file if missing |
 | `edit_lines` | Replace, delete, or insert by 1-based line range, guarded by `expected` text |
@@ -74,7 +75,7 @@ Every tool here is a fixed, reviewable operation behind a single sandbox:
 | `regex_replace` | .NET regex substitution over one file or a glob, dry run by default |
 | `read_around` | Numbered lines around each match of a pattern in one file |
 | `read_tail` | Last N lines with line numbers |
-| `undo_list` | Changes made this session, with ids |
+| `undo_list` | Changes that can still be reverted, with ids |
 | `undo` | Revert a change by id, or the latest |
 
 ### Examples of what the agent sees
@@ -115,9 +116,13 @@ The sandbox has one permission level. A path is either fully allowed for every t
   `*.pfx`, `*.p12`, `id_rsa*`, `id_ed25519*` and apply to reads as well as writes. Add more with
   `--deny`.
 - **Roots themselves** cannot be deleted or moved.
-- **Bulk operations** refuse to run when more files match than `maxFiles` (default 20, hard cap
-  `--max-bulk-files`), and `regex_replace` excludes `bin`, `obj`, `.git`, `.vs` and `node_modules`
-  by default.
+- **Bulk operations** refuse to run when more files would change than `maxFiles` (default 20, hard
+  cap `--max-bulk-files`). `regex_replace` scans every file its glob matches but counts only files
+  that contain at least one match against the cap, so a wide sweep that touches few files is not
+  refused. A file where the replacement reproduces the existing text is reported separately and
+  is not written. It excludes `bin`, `obj`, `.git`, `.vs` and `node_modules` by default. Globs
+  accept `{a,b}` alternation, and a glob that matches no files is an error rather than an empty
+  result.
 - **Size cap** of 20 MB (`--max-file-mb`) on text operations. Binary files are refused by text tools.
 
 The server runs as the invoking user with no elevation, so operating-system permissions still
@@ -129,8 +134,13 @@ allow, ask or deny policy belongs.
 
 This is a stdio server. The MCP client starts it as a child process, speaks JSON-RPC over its
 stdin and stdout, and kills it when the session ends. There is no service or daemon. Each client
-session gets its own instance with its own roots, and undo history lives in that process. Trash
-contents and undo snapshots are files under the trash directory, so they outlive the process.
+session gets its own instance with its own roots. Trash contents and the undo journal are files
+under the trash directory, so they outlive the process: undo ids keep counting across restarts
+and reconnects, `undo` with no id reverts the newest entry even if an earlier session made it,
+and the newest 100 entries are kept. Servers that share a trash directory share the journal and
+take turns through a lock file; each one lists and reverts only entries whose paths lie inside
+its own roots. On startup the server deletes snapshot folders no entry refers to. Trashed files
+are never removed automatically.
 
 ```
 FileInteractionMCP.exe --root D:\path\to\project [--root other] [--trash dir]
@@ -172,7 +182,7 @@ code, rebuild and reconnect the client (`/mcp` in Claude Code) so the new proces
 
 ```
 FileInteractionMCP/
-  Sandbox/   root allowlist, symlink resolution, deny patterns, undo journal, shared file ops
+  Sandbox/   root allowlist, symlink resolution, deny patterns, persistent undo journal, shared file ops
   Text/      encoding and line-ending preserving load/save, unified diff, fuzzy matching
   Tools/     the MCP tool classes and their result records
   Program.cs host setup and tool registration
