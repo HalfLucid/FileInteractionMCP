@@ -29,8 +29,9 @@ public sealed class SandboxOptions
 
     /// <summary>
     /// Parses: --root &lt;dir&gt; (repeatable), --trash &lt;dir&gt;, --deny &lt;pattern&gt; (repeatable),
-    /// --max-file-mb &lt;n&gt;, --max-bulk-files &lt;n&gt;. Env FIMCP_ROOTS (path-separator delimited) and
-    /// FIMCP_TRASH are also honored. With no roots at all, the current directory is the single root.
+    /// --max-file-mb &lt;n&gt;, --max-bulk-files &lt;n&gt;, --claude-scratchpad. Env FIMCP_ROOTS
+    /// (path-separator delimited) and FIMCP_TRASH are also honored. With no roots at all, the current
+    /// directory is the single root.
     /// </summary>
     public static SandboxOptions FromArgs(string[] args)
     {
@@ -39,6 +40,7 @@ public sealed class SandboxOptions
         string? trash = null;
         long maxMb = 20;
         int maxBulk = 50;
+        bool claudeScratchpad = false;
 
         var queue = new Queue<string>(args);
         while (queue.Count > 0)
@@ -53,6 +55,7 @@ public sealed class SandboxOptions
                 case "--deny": deny.Add(Value()); break;
                 case "--max-file-mb": maxMb = long.Parse(Value()); break;
                 case "--max-bulk-files": maxBulk = int.Parse(Value()); break;
+                case "--claude-scratchpad": claudeScratchpad = true; break;
                 default: throw new ArgumentException($"Unknown argument '{flag}'.");
             }
         }
@@ -66,6 +69,13 @@ public sealed class SandboxOptions
         if (roots.Count == 0)
         {
             roots.Add(Environment.CurrentDirectory);
+        }
+
+        if (claudeScratchpad)
+        {
+            var scratch = ClaudeScratchpadParent(roots[0]);
+            Directory.CreateDirectory(scratch);
+            roots.Add(scratch);
         }
 
         trash ??= Environment.GetEnvironmentVariable("FIMCP_TRASH");
@@ -97,5 +107,17 @@ public sealed class SandboxOptions
             MaxTextFileBytes = maxMb * 1024 * 1024,
             MaxBulkFiles = maxBulk,
         };
+    }
+
+    /// <summary>
+    /// Claude Code keeps per-session scratchpads under &lt;temp&gt;\claude\&lt;slug&gt;\, where the slug is the
+    /// project path with every non-alphanumeric character replaced by '-'
+    /// (D:\NewDev\FileInteractionMCP becomes D--NewDev-FileInteractionMCP).
+    /// </summary>
+    private static string ClaudeScratchpadParent(string projectRoot)
+    {
+        var project = Path.TrimEndingDirectorySeparator(Path.GetFullPath(projectRoot));
+        var slug = new string(project.Select(c => char.IsAsciiLetterOrDigit(c) ? c : '-').ToArray());
+        return Path.Combine(Path.GetTempPath(), "claude", slug);
     }
 }

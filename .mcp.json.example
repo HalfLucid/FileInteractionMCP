@@ -3,7 +3,10 @@
     "fileinteraction": {
       "type": "stdio",
       "command": "<absolute path to repo>\\FileInteractionMCP\\bin\\Debug\\net10.0\\win-x64\\FileInteractionMCP.exe",
-      "args": ["--root", "<absolute path to repo>"]
+      "args": [
+        "--root", "<absolute path to repo>",
+        "--claude-scratchpad"
+      ]
     }
   }
 }

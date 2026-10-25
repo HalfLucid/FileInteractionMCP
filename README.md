@@ -110,6 +110,9 @@ The sandbox has one permission level. A path is either fully allowed for every t
 - **Roots** come from `--root` arguments (repeatable) and the `FIMCP_ROOTS` environment variable.
   With neither, the process working directory is the single root. Roots must exist at startup and
   are fixed for the life of the process. Relative paths resolve against the first root.
+  `--claude-scratchpad` adds one more: the folder Claude Code keeps this project's per-session
+  scratchpads in, `<temp>\claude\<slug>`, where the slug is the first root's full path with every
+  non-alphanumeric character replaced by `-`. It is created at startup if missing.
 - **Symlink resolution** happens segment by segment. A junction inside a root that points outside
   it is rejected before any write.
 - **Deny patterns** default to `.git`, `.svn`, `.hg`, `.ssh`, `.env`, `.env.*`, `*.pem`, `*.key`,
@@ -145,6 +148,7 @@ are never removed automatically.
 ```
 FileInteractionMCP.exe --root D:\path\to\project [--root other] [--trash dir]
                        [--deny pattern] [--max-file-mb 20] [--max-bulk-files 50]
+                       [--claude-scratchpad]
 ```
 
 The default trash is `%LOCALAPPDATA%\FileInteractionMCP\trash` (`FIMCP_TRASH` overrides it).
@@ -159,7 +163,7 @@ Add a `.mcp.json` to the project:
     "fileinteraction": {
       "type": "stdio",
       "command": "D:\\path\\to\\FileInteractionMCP\\bin\\Debug\\net10.0\\win-x64\\FileInteractionMCP.exe",
-      "args": ["--root", "D:\\path\\to\\project"]
+      "args": ["--root", "D:\\path\\to\\project", "--claude-scratchpad"]
     }
   }
 }

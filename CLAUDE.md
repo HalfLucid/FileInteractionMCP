@@ -8,6 +8,9 @@ Solution: `FileInteractionMCP.slnx`. Project: `FileInteractionMCP/`. Build with 
 The server is registered in `.mcp.json` as `fileinteraction` and points at the Debug build output.
 `.mcp.json` is untracked because it holds absolute local paths; copy `.mcp.json.example` to `.mcp.json`
 and fill in the paths for this machine.
+`--claude-scratchpad` adds the parent of Claude Code's per-session scratchpad directories for this
+project (`<temp>\claude\<project slug>`, derived from the first root and created if missing) as a root,
+so the tools can write to the scratchpad too.
 After changing server code, run `dotnet build` and restart the MCP server (`/mcp`) before the change is live.
 
 When the `fileinteraction` tools are available, use them instead of shell commands for:
